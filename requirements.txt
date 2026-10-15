@@ -1,8 +1,12 @@
-# Core data pipeline
+# Core data pipeline (raw KKBox data is ~32 GB — queried with DuckDB over Parquet)
+duckdb>=1.1
+pyarrow>=15
 pandas>=2.0
 numpy>=1.24
-python-dateutil>=2.8
 
-# Dashboard (pick the track you actually build — see README > Tech Stack)
+# Churn model (Step 4)
+scikit-learn>=1.5
+
+# Dashboard
 streamlit>=1.30
 plotly>=5.18
