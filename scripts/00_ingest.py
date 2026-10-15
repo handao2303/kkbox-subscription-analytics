@@ -6,8 +6,10 @@ files total ~32 GB and ~420M rows, so pandas cannot hold them in memory.
 
 What this step does (and nothing more — cleaning decisions live in Step 1):
   - parses YYYYMMDD integers into DATEs
-  - unions v1 + v2 transactions and user logs, dropping exact duplicate rows
-    (v2 re-ships part of v1's period)
+  - unions v1 + v2 transactions, dropping exact duplicate rows (v2 re-ships
+    part of v1's period)
+  - unions v1 + v2 user logs as-is: v1 ends 2017-02-28 and v2 covers March
+    2017 only, so they cannot overlap (a DISTINCT over ~410M rows needs >10 GB RAM)
   - keeps the two churn label sets separate: train_v1 labels Feb 2017
     expiries, train_v2 labels Mar 2017 expiries
 
@@ -19,9 +21,7 @@ Usage: python scripts/00_ingest.py [table ...]   (default: all; existing files a
 import sys
 import time
 
-import duckdb
-
-from config import PARQUET_DIR, RAW, parquet
+from config import PARQUET_DIR, RAW, connect, parquet
 
 DATE = "strptime(CAST({c} AS VARCHAR), '%Y%m%d')::DATE"
 
@@ -39,7 +39,7 @@ SELECTS = {
                is_cancel::BOOLEAN AS is_cancel
         FROM {{src}}""",
     "user_logs": f"""
-        SELECT DISTINCT msno, {DATE.format(c='date')} AS date,
+        SELECT msno, {DATE.format(c='date')} AS date,
                num_25, num_50, num_75, num_985, num_100, num_unq, total_secs
         FROM {{src}}""",
     "train_v1": "SELECT msno, is_churn::BOOLEAN AS is_churn FROM {src}",
@@ -76,11 +76,7 @@ def ingest(con, name):
 
 def main():
     PARQUET_DIR.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect()
-    # DISTINCT over ~400M user_log rows spills to disk; keep RAM headroom.
-    con.execute("SET memory_limit = '10GB'")
-    con.execute(f"SET temp_directory = '{(PARQUET_DIR / '_tmp').as_posix()}'")
-    con.execute("SET preserve_insertion_order = false")
+    con = connect("00")
 
     names = sys.argv[1:] or list(SELECTS)
     print(f"Ingesting into {PARQUET_DIR}")

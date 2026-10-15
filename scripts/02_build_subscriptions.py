@@ -22,14 +22,10 @@ Output:
 
 import time
 
-import duckdb
-
-from config import DATA_END, GRACE_DAYS, OUTPUT, PARQUET_DIR, parquet
+from config import DATA_END, GRACE_DAYS, OUTPUT, connect, parquet
 
 t0 = time.time()
-con = duckdb.connect()
-con.execute("SET memory_limit = '10GB'")
-con.execute(f"SET temp_directory = '{(PARQUET_DIR / '_tmp').as_posix()}'")
+con = connect("02")
 
 con.execute(f"""
 CREATE TEMP TABLE tx AS

@@ -8,11 +8,11 @@ the metrics can be traced back to them.
 Output: output/data_quality_notes.md
 """
 
-import duckdb
 
-from config import OUTPUT, PARQUET_DIR, parquet
 
-con = duckdb.connect()
+from config import OUTPUT, PARQUET_DIR, connect, parquet
+
+con = connect("01")
 T, M = f"'{parquet('transactions')}'", f"'{parquet('members')}'"
 
 
