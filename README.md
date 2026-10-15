@@ -1,23 +1,49 @@
-# TaskFlow — SaaS Metrics Analysis
+<div align="center">
 
-**MRR · Churn · NRR · LTV:CAC — reconstructed from a raw billing event ledger**
+# KKBox Subscription Analytics
+
+**MRR · Churn · NRR · Cohorts · LTV, rebuilt from 430M rows of raw billing and listening logs**
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
-![pandas](https://img.shields.io/badge/pandas-2.x-150458?logo=pandas&logoColor=white)
-![NumPy](https://img.shields.io/badge/NumPy-1.24%2B-013243?logo=numpy&logoColor=white)
-![Status](https://img.shields.io/badge/status-complete-2E6B4E)
-![License](https://img.shields.io/badge/license-portfolio--project-lightgrey)
+![DuckDB](https://img.shields.io/badge/DuckDB-1.x-FFF000?logo=duckdb&logoColor=black)
+![Parquet](https://img.shields.io/badge/Apache%20Parquet-zstd-50ABF1?logo=apacheparquet&logoColor=white)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-1.5%2B-F7931E?logo=scikitlearn&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-dashboard-FF4B4B?logo=streamlit&logoColor=white)
+![Data](https://img.shields.io/badge/data-Kaggle%20KKBox-20BEFF?logo=kaggle&logoColor=white)
+![Status](https://img.shields.io/badge/status-in%20progress-eda100)
 
-Personal ITBA portfolio project. TaskFlow is a **fictional** project-management
-SaaS with 24 months of synthetic subscription data (Jan 2023 – Dec 2024),
-shaped like a real Stripe/billing export. The goal is to reconstruct core
-SaaS financial metrics from a raw event ledger — no metric is handed to you
-pre-computed — and turn them into business recommendations, the same
-workflow a Business Analyst runs on real billing data.
+<br>
 
-**Headline result:** MRR grew from $1,327 to $93,204 over 24 months, but NRR
-averages 98.7% — growth is acquisition-driven, not retention-driven. Full
-reasoning in [`output/business_insights.md`](output/business_insights.md).
+<img src="docs/images/mrr_trend.png" alt="KKBox monthly recurring revenue, Jul 2015 to Feb 2017" width="860">
+
+</div>
+
+---
+
+## At a glance
+
+KKBox is Taiwan's largest music-streaming subscription service. This project
+treats its public Kaggle data the way a Business Analyst would treat a real
+billing export: **no metric is pre-computed** — MRR, churn and retention are
+reconstructed from 23M payment transactions, then explained with 410M daily
+listening logs.
+
+<table>
+<tr>
+<td align="center"><b>151.1M NTD</b><br><sub>MRR, Feb 2017</sub></td>
+<td align="center"><b>+44.5%</b><br><sub>MRR growth, Jul 2015 → Feb 2017</sub></td>
+<td align="center"><b>1.17M</b><br><sub>paying users, Feb 2017</sub></td>
+<td align="center"><b>3.9%</b><br><sub>avg. monthly paid churn<br>(excl. billing gaps)</sub></td>
+<td align="center"><b>94.8%</b><br><sub>avg. monthly NRR</sub></td>
+<td align="center"><b>13.1%</b><br><sub>trial → paid conversion</sub></td>
+</tr>
+</table>
+
+> **Headline:** revenue grows, but the existing base shrinks ~5% a month.
+> Growth depends on new sign-ups **and on win-backs** (reactivations added
+> 63.7M NTD of MRR over 20 months — more than half of what new users added).
+> 15% of all paid churn is not users leaving at all: it is **payment-partner
+> outages** where one billing channel fails and its users come back weeks later.
 
 ---
 
@@ -25,312 +51,316 @@ reasoning in [`output/business_insights.md`](output/business_insights.md).
 
 - [Business questions](#business-questions)
 - [Key findings](#key-findings)
-- [Tech stack](#tech-stack)
 - [Architecture](#architecture)
-- [Data model](#data-model)
+- [Data](#data)
+- [Metric definitions](#metric-definitions)
+- [Analysis decisions](#analysis-decisions)
 - [Repository structure](#repository-structure)
-- [Pipeline / build plan](#pipeline--build-plan)
-- [Key formulas](#key-formulas-reference)
 - [Getting started](#getting-started)
-- [Status](#status)
-- [Known limitations](#known-limitations)
+- [Project tracking](#project-tracking)
+- [Limitations](#limitations)
 
 ---
 
 ## Business questions
 
-This project must produce a defensible answer to each of these:
-
-1. **Health** — Is TaskFlow growing in a healthy way, or leaking revenue?
-2. **Channel quality** — Which acquisition channel brings the best-quality customers (highest LTV:CAC)?
-3. **Strategy** — Should the company prioritize acquisition (new customers) or retention (reducing churn) next quarter?
+| # | Question | Answered by |
+|---|---|---|
+| 1 | **Health** — is MRR growing in a healthy way, and where does revenue leak? | MRR bridge, churn split, NRR |
+| 2 | **Segments** — which sign-up channel, payment method and plan type keep users longest and are worth most? | Cohorts, LTV by segment |
+| 3 | **Action** — should KKBox push auto-renew, fight voluntary cancellation, or re-engage low-listening users first? | Churn reasons, churn model *(phase 4)* |
 
 ---
 
 ## Key findings
 
-Full write-up with Finding → So what → Recommendation for each business
-question: [`output/business_insights.md`](output/business_insights.md).
+### 1 · Where MRR moves each month
 
-| Question | Answer |
-|---|---|
-| Is growth healthy? | Mostly no. MRR grew 70x ($1,327 → $93,204) but NRR averages **98.7%** — the existing customer base nets **−$9,186** over 24 months once churn and contraction are netted against expansion. Growth is 100% acquisition-fed. |
-| Best acquisition channel? | **Referral**, at **28.7:1** LTV:CAC — 15x more efficient than **Paid Ads** (2.0:1), which is also the 2nd-largest spend channel. |
-| Acquisition or retention next quarter? | **Retention.** Revenue churn (3.3%/mo) sits well below logo churn (8.3%/mo) — the leak is concentrated in low-value accounts, which is the cheapest segment to fix before spending more on acquisition. |
+<img src="docs/images/mrr_bridge.png" alt="Monthly MRR bridge: new, reactivation, expansion, contraction, churn and billing-gap churn" width="860">
 
----
+Over Jul 2015 – Feb 2017, MRR grew from **104.5M to 151.1M NTD**:
 
-## Tech stack
+| Movement (20 months) | MRR (NTD) |
+|---|---:|
+| ➕ New paying users | +118.8M |
+| ➕ Reactivated users | +63.7M |
+| ➕ Expansion (higher-priced plan) | +5.0M |
+| ➖ Contraction (cheaper plan / free promo) | −11.3M |
+| ➖ Churn — billing gaps | −18.6M |
+| ➖ Churn — all other | −107.1M |
 
-| Layer | Tool | Purpose |
-|---|---|---|
-| Language | **Python 3.10+** | Data generation, transformation, metric calculations |
-| Data wrangling | **pandas**, **NumPy** | Forward-fill snapshots, groupby aggregations, waterfall/cohort logic |
-| Dates | **python-dateutil** | Month-boundary arithmetic (`relativedelta`) |
-| Storage | **CSV** (flat files) | Event ledger + dimension tables — mirrors a raw billing export |
-| Dashboard | **Streamlit + Plotly** *(or Power BI / Tableau Public)* | Interactive Growth / Retention / Unit Economics views |
-| Docs | **Markdown** | Data dictionary, data-quality notes, business insights |
+Expansion is almost absent: KKBox has one main price point, so revenue per
+user cannot grow — retention is the only lever on the existing base.
 
-> The dashboard track is a choice, not a fixed dependency — build it in
-> whichever of Streamlit/Plotly, Power BI, or Tableau Public best fits how
-> you want to present it. `requirements.txt` includes the Python track.
+### 2 · Paid churn, with and without payment-partner outages
+
+<img src="docs/images/churn_rates.png" alt="Monthly paid churn rate with and without billing gaps" width="860">
+
+The pipeline detects **7 mass outages** automatically (a payment method's churn
+≥ 3× its normal level, ≥ 5,000 users, and most of them return on the same method
+within 6 months). The largest — **payment method 39 in Mar 2016** — took
+**71,108 paying users** offline (61× its usual monthly churn); **97.5%** came
+back. Under the Kaggle definition these are churn; operationally they are a
+**payment-partner risk** that churn-reduction campaigns cannot fix.
+
+### 3 · Why paying users leave
+
+<img src="docs/images/churn_types.png" alt="Share of paid churn by reason" width="860">
+
+Only **6%** of paid churn is an explicit cancellation. Nearly half is users on
+**manual (non-auto-renew) plans who simply do not pay again**, and another 30%
+is auto-renew payments that lapse. Both are fixable in the billing flow,
+not in the product.
+
+### 4 · Cohort retention
+
+<img src="docs/images/cohort_retention.png" alt="Cohort retention heatmap by first-payment month" width="860">
+
+Retention is front-loaded and then flattens: **~12% of a new paying cohort is
+gone after one month**, ~22% by month 6, and **69–75% are still paying after a
+year**. Once users survive the first quarter they are remarkably sticky, so
+the cheapest retention win is in the first 1–3 months. Some cells rise from
+month 3 to month 6 — that is users coming back (reactivation), not a data error.
+
+### 5 · Lifetime value by plan type
+
+<img src="docs/images/ltv_segments.png" alt="LTV by plan length and renewal type" width="860">
+
+Revenue per user is almost flat (~120–150 NTD/month), so **LTV is decided by
+churn**. Auto-renew users are worth **3.6×** manual payers (5,874 vs 1,620 NTD;
+2.2% vs 8.5% monthly churn), and annual plans **2.4×** monthly plans. Sign-up
+channel matters as much: users registered via channel 7 have an LTV of
+6,584 NTD, 4.5× channel 4 (1,467 NTD).
+
+**So what:** moving manual payers onto auto-renew is the single largest LTV
+lever in the data — larger than any segment difference driven by price.
+
+> Full numbers: [`output/`](output/) · Trial cohorts: [`output/trial_conversion.csv`](output/trial_conversion.csv)
 
 ---
 
 ## Architecture
 
-End-to-end flow from raw ledger to business recommendation:
-
 ```mermaid
 flowchart LR
-    subgraph Raw["📥 Raw Data (data/)"]
-        A1[customers.csv]
-        A2[subscription_events.csv]
-        A3[marketing_spend.csv]
-        A4[plans.csv]
+    subgraph K["Kaggle · kkbox-churn-prediction-challenge"]
+        R1[transactions v1+v2<br/>23.0M rows]
+        R2[user_logs v1+v2<br/>410.5M rows]
+        R3[members_v3<br/>6.8M rows]
+        R4[train v1/v2<br/>churn labels]
     end
 
-    subgraph Pipeline["⚙️ Processing (scripts/)"]
-        B0[00_generate_data.py]
-        BQ[01_data_quality_checks.py]
-        B1[02_build_monthly_snapshot.py]
-        B2[03_calculate_metrics.py]
+    subgraph P["Parquet store · outside git"]
+        I0[[00_ingest.py<br/>typed, deduplicated]]
     end
 
-    subgraph Outputs["📊 Metrics (output/)"]
-        C0[data_quality_notes.md]
-        C1[monthly_snapshot.csv]
-        C2[mrr_by_month.csv]
-        C3[mrr_waterfall.csv]
-        C4[churn_rate_by_month.csv]
-        C5[nrr_by_month.csv]
-        C6[cac_by_channel.csv / ltv_by_plan.csv]
-        C7[ltv_cac_by_channel.csv]
-        C8[cohort_retention.csv]
+    subgraph S["Pipeline · DuckDB"]
+        Q1[01_data_quality.py]
+        Q2[02_build_subscriptions.py<br/>user × month snapshot<br/>24.9M rows]
+        Q3[03_calculate_metrics.py<br/>transitions + billing-gap detection]
+        Q4[04_churn_drivers.py<br/>segments + ML model]
     end
 
-    D[📈 Dashboard — Streamlit + Plotly\nGrowth · Retention · Unit Economics]
-    E[📝 business_insights.md\nFinding → So what → Recommendation]
+    subgraph O["Outputs · output/"]
+        O1[data_quality_notes.md]
+        O2[mrr_waterfall · churn_rate<br/>cohort_retention · ltv_by_segment<br/>trial_conversion · churn_type]
+    end
 
-    B0 -.generates.-> A1 & A2 & A3 & A4
-    A1 & A2 --> BQ --> C0
-    A1 & A2 --> B1 --> C1
-    C1 --> B2
-    A3 & A4 --> B2
-    B2 --> C2 & C3 & C4 & C5 & C6 & C7 & C8
-    C2 & C3 & C4 & C5 & C6 & C7 & C8 --> D
-    D --> E
+    D[📊 Streamlit dashboard]
+    B[📝 Business insights]
+
+    R1 & R2 & R3 & R4 --> I0
+    I0 --> Q1 --> O1
+    I0 --> Q2 --> Q3 --> O2
+    I0 --> Q4
+    O2 --> D
+    Q4 --> D
+    D --> B
+```
+
+**Why DuckDB + Parquet:** the raw CSVs are ~32 GB, far beyond what pandas can
+hold in 16 GB of RAM. DuckDB streams them into compressed Parquet once (8.2 GB,
+~4× smaller), then every step runs SQL over Parquet with a capped memory budget
+and spills to disk when needed. Only small aggregated CSVs land in the repo.
+
+---
+
+## Data
+
+Source: [KKBox Churn Prediction Challenge](https://www.kaggle.com/competitions/kkbox-churn-prediction-challenge) (WSDM Cup 2018).
+
+```mermaid
+erDiagram
+    MEMBERS ||--o{ TRANSACTIONS : pays
+    MEMBERS ||--o{ USER_LOGS : listens
+    MEMBERS ||--o| TRAIN_LABELS : "is labelled"
+
+    MEMBERS {
+        string msno PK "hashed user id"
+        int city
+        int bd "age (67% invalid)"
+        string gender "65% missing"
+        int registered_via "sign-up channel"
+        date registration_date
+    }
+    TRANSACTIONS {
+        string msno FK
+        int payment_method_id
+        int payment_plan_days
+        int plan_list_price "NTD"
+        int actual_amount_paid "NTD"
+        bool is_auto_renew
+        date transaction_date
+        date membership_expire_date
+        bool is_cancel
+    }
+    USER_LOGS {
+        string msno FK
+        date date
+        int num_25 "songs played <25%"
+        int num_100 "songs played >98.5%"
+        int num_unq "unique songs"
+        float total_secs
+    }
+    TRAIN_LABELS {
+        string msno FK
+        bool is_churn "no renewal within 30 days of expiry"
+    }
+```
+
+| Table | Rows | Period |
+|---|---:|---|
+| `transactions` (v1 + v2, deduplicated) | 22,975,416 | Jan 2015 – Mar 2017 |
+| `user_logs` (v1 + v2) | 410,502,905 | Jan 2015 – Mar 2017 |
+| `members_v3` | 6,769,473 | — |
+| `train_v2` labels | 970,960 | Mar 2017 expiries |
+
+Every data issue found, and how it is handled, is in
+[`output/data_quality_notes.md`](output/data_quality_notes.md).
+
+---
+
+## Metric definitions
+
+All money is **NTD**. A user's state at a month-end comes from their latest
+transaction on or before that date.
+
+| Metric | Definition |
+|---|---|
+| **Active** | month-end falls inside a paid or free membership (30-day grace for late renewals) |
+| **MRR** | `actual_amount_paid ÷ plan months`; 28–31-day plans = 1 month, longer plans = days ÷ 30 |
+| **Logo churn** | active at M−1, not active at M (Kaggle rule) |
+| **Paid churn** | paying at M−1, not active at M |
+| **Paid churn excl. billing gap** | paid churn without users caught in a detected payment-partner outage |
+| **Revenue churn** | MRR of paid churners ÷ MRR at M−1 |
+| **NRR** | MRR at M from users paying at M−1 ÷ their MRR at M−1 |
+| **Trial conversion** | users whose first month is free and who pay within 3 months |
+| **LTV** | ARPU ÷ monthly paid churn (billing gaps excluded) |
+
+```text
+NRR  = (Starting MRR + Expansion − Contraction − Churn) / Starting MRR
+LTV  = ARPU / monthly paid churn
 ```
 
 ---
 
-## Data model
+## Analysis decisions
 
-The event ledger is the **source of truth** — MRR, churn, and NRR are all
-derived from it, never read off a pre-built column.
+Decisions that change the numbers, and why ([KKBOX-5](https://baohandao2303.atlassian.net/browse/KKBOX-5)):
 
-```mermaid
-erDiagram
-    CUSTOMERS ||--o{ SUBSCRIPTION_EVENTS : "has events"
-    CUSTOMERS }o--|| PLANS : "initial_plan"
-    SUBSCRIPTION_EVENTS }o--|| PLANS : "plan_before / plan_after"
-    CUSTOMERS }o--|| MARKETING_SPEND : "acquisition_channel + signup month"
-
-    CUSTOMERS {
-        string customer_id PK
-        date signup_date
-        string acquisition_channel
-        string region
-        int company_size
-        string initial_plan
-    }
-    SUBSCRIPTION_EVENTS {
-        string event_id PK
-        string customer_id FK
-        date event_date
-        string event_type "signup upgrade downgrade cancel"
-        string plan_before
-        string plan_after
-        number mrr_before
-        number mrr_after
-    }
-    MARKETING_SPEND {
-        date month
-        string channel
-        number spend
-    }
-    PLANS {
-        string plan PK
-        number monthly_price_usd
-    }
-```
-
-A customer's **state in any given month** = their last event on or before
-that month (forward-filled).
+| Decision | Choice | Reason |
+|---|---|---|
+| Churn definition | Kaggle's: no renewal within 30 days of expiry | Metrics and ML labels agree |
+| Billing-gap outages | Kept in churn, **flagged**, also reported excluded | Kaggle-consistent, but separates a partner risk from real churn |
+| Free trials | Tracked as conversion, never mixed into paid churn | A trial ending is not a paying user leaving |
+| Report window | **Jul 2015 – Feb 2017** | No data before Jan 2015 (6-month warm-up); Mar 2017 lacks the 30-day look-ahead |
+| `user_logs` dedup | v1 and v2 unioned as-is | Date ranges cannot overlap; a DISTINCT over 410M rows needs > 10 GB RAM |
 
 ---
 
 ## Repository structure
 
-```
+```text
 taskflow-saas-metrics/
-├── README.md                        you are here
-├── requirements.txt                  Python dependencies
-├── data/
-│   ├── customers.csv                 customer dimension table        (5,142 rows)
-│   ├── subscription_events.csv       event ledger — source of truth  (8,151 rows)
-│   ├── marketing_spend.csv           monthly spend by channel        (120 rows)
-│   ├── plans.csv                     plan pricing reference          (4 rows)
-│   └── data_dictionary.md            full schema + known limitations
+├── README.md
+├── requirements.txt
 ├── scripts/
-│   ├── 00_generate_data.py           dataset generator (seeded, reproducible)
-│   ├── 01_data_quality_checks.py     sanity-checks the ledger, writes data_quality_notes.md
-│   ├── 02_build_monthly_snapshot.py  forward-fills plan/MRR per customer/month
-│   └── 03_calculate_metrics.py       computes all 8 metric CSVs below
-├── output/                           analysis results (CSVs, notes) — all generated
-│   ├── data_quality_notes.md         6/6 checks passed
-│   ├── monthly_snapshot.csv          32,681 customer-month rows
-│   ├── mrr_by_month.csv
+│   ├── config.py                  paths, report window, DuckDB connection helper
+│   ├── 00_ingest.py               Kaggle CSV → typed Parquet (raw data stays outside git)
+│   ├── 01_data_quality.py         checks + handling decisions → data_quality_notes.md
+│   ├── 02_build_subscriptions.py  user × month snapshot (MRR, status, cohort)
+│   ├── 03_calculate_metrics.py    MRR bridge, churn, NRR, cohorts, LTV, billing gaps
+│   └── make_readme_charts.py      renders docs/images/*.png from output/
+├── output/                        small aggregated results — all generated
+│   ├── data_quality_notes.md
+│   ├── monthly_summary.csv
 │   ├── mrr_waterfall.csv
 │   ├── churn_rate_by_month.csv
-│   ├── nrr_by_month.csv
-│   ├── cac_by_channel.csv
-│   ├── ltv_by_plan.csv
-│   ├── ltv_cac_by_channel.csv
+│   ├── churn_type_by_month.csv
+│   ├── billing_gap_episodes.csv
+│   ├── trial_conversion.csv
 │   ├── cohort_retention.csv
-│   └── business_insights.md          Finding → So what → Recommendation
+│   └── ltv_by_segment.csv
+├── docs/images/                   README charts
 └── dashboard/
-    └── app.py                        Streamlit app — 3 views, run with `streamlit run dashboard/app.py`
-```
-
----
-
-## Pipeline / build plan
-
-Run in order — each step depends on the previous step's output.
-
-```mermaid
-flowchart TD
-    S1[Step 1 · Data understanding & cleaning\nsanity-check the event ledger] --> S2
-    S2[Step 2 · Monthly customer snapshot\nforward-fill plan/MRR per customer] --> S3
-    S3[Step 3 · Core metrics\nMRR, churn, NRR, CAC, LTV, cohorts] --> S4
-    S4[Step 4 · Dashboard\nGrowth · Retention · Unit Economics] --> S5
-    S5[Step 5 · Insights & recommendations\nanswer the 3 business questions] --> S6
-    S6[Step 6 · Limitations\ndocument assumptions & gaps]
-```
-
-### Step 1 — Data understanding & cleaning
-- Script: `scripts/01_data_quality_checks.py`
-- Sanity-checks the event ledger: no duplicate signups per customer, no
-  negative MRR values, all event_dates within Jan 2023–Dec 2024, at most
-  one event per customer per month, no same-month signup+cancel, full
-  referential integrity against `customers.csv`.
-- Output: `output/data_quality_notes.md` — **6/6 checks passed**, ledger
-  needs no cleaning before Step 2.
-
-### Step 2 — Build the monthly customer snapshot
-- Script: `scripts/02_build_monthly_snapshot.py`
-- For every customer, forward-fills their plan/MRR state across every
-  month from signup to Dec 2024 (or the month before they cancel), using
-  the event ledger in `subscription_events.csv` and a `merge_asof`
-  "last event on/before month M" join.
-- Output: `output/monthly_snapshot.csv` — 32,681 rows, columns:
-  `customer_id, month, plan, mrr, acquisition_channel`.
-- Sanity check: **2,162** paying customers active in Dec 2024 — matches the
-  README's target exactly.
-
-### Step 3 — Core metrics
-- Script: `scripts/03_calculate_metrics.py`
-- Computes, saves each to its own CSV in `output/` (gross margin assumption: **80%**):
-
-| File | Contents |
-|---|---|
-| `mrr_by_month.csv` | Total MRR per month |
-| `mrr_waterfall.csv` | New / Expansion / Contraction / Churned MRR per month |
-| `churn_rate_by_month.csv` | Logo churn % and revenue churn % |
-| `nrr_by_month.csv` | Net Revenue Retention % |
-| `cac_by_channel.csv` | `marketing_spend` / new customers, per channel per month |
-| `ltv_by_plan.csv` | LTV = (ARPU × gross margin assumption) / churn rate — **state the gross margin assumption explicitly** (e.g. 80%), it's not in the data |
-| `ltv_cac_by_channel.csv` | LTV:CAC ratio per channel |
-| `cohort_retention.csv` | % of each signup-month cohort still active N months later |
-
-### Step 4 — Dashboard
-- App: `dashboard/app.py` (Streamlit + Plotly) — run with
-  `streamlit run dashboard/app.py`.
-- Three views, each reading directly from `output/*.csv`:
-  - **Growth Overview** — MRR trend, MRR waterfall, headline KPIs
-  - **Retention Health** — logo vs. revenue churn, NRR trend, cohort retention heatmap
-  - **Unit Economics** — LTV:CAC by channel (vs. 3:1 benchmark), LTV/CAC by channel
-- Colors are assigned by a fixed rule: each acquisition channel keeps one
-  color across every chart on the page; the LTV:CAC chart uses status
-  color (green/red) against the 3:1 benchmark line, not the channel colors.
-
-### Step 5 — Insights & recommendations
-- `output/business_insights.md`: Finding → So what → Recommendation,
-  answering the [3 business questions](#business-questions) — see [Key findings](#key-findings) above for the short version.
-
-### Step 6 — Limitations
-- Documented in `output/business_insights.md`: no involuntary churn modeled,
-  gross margin (80%) is an assumption, no macro/competitive effects, CAC is
-  blended per channel (not per-campaign).
-
----
-
-## Key formulas reference
-
-```
-MRR                 = sum(active subscription monthly value)
-Churn Rate (%)      = churned customers in month / active customers at start of month
-NRR (%)             = (Starting MRR + Expansion − Contraction − Churned MRR) / Starting MRR
-                       (existing customers only — excludes New MRR)
-CAC                 = marketing spend / new customers acquired, per channel/month
-LTV                 = (ARPU × gross margin %) / monthly churn rate
-LTV:CAC ratio       = LTV / CAC   (healthy benchmark: > 3:1)
+    └── app.py                     Streamlit app (being rebuilt — phase 5)
 ```
 
 ---
 
 ## Getting started
 
+**Requirements:** Python 3.10+, ~50 GB free disk, 16 GB RAM, a
+[Kaggle API token](https://www.kaggle.com/docs/api) and acceptance of the
+competition rules.
+
 ```bash
-# 1. Install dependencies
+# 1. Install
 pip install -r requirements.txt
 
-# 2. (Optional) Regenerate the synthetic dataset — seeded & reproducible
-python scripts/00_generate_data.py
+# 2. Download + extract the data (outside the repo)
+kaggle competitions download -c kkbox-churn-prediction-challenge -p D:/datasets/kkbox/raw
+7z x "D:/datasets/kkbox/raw/*.7z" -oD:/datasets/kkbox/csv
 
-# 3. Data quality checks -> output/data_quality_notes.md
-python scripts/01_data_quality_checks.py
+# 3. Point the pipeline at it (default: D:\datasets\kkbox)
+export KKBOX_DIR=D:/datasets/kkbox          # optional
+export KKBOX_MEMORY=10GB                    # optional DuckDB RAM cap
 
-# 4. Build the monthly customer snapshot -> output/monthly_snapshot.csv
-python scripts/02_build_monthly_snapshot.py
-
-# 5. Compute all 8 core metrics -> output/*.csv
-python scripts/03_calculate_metrics.py
-
-# 6. Launch the dashboard
-streamlit run dashboard/app.py
+# 4. Run the pipeline
+python scripts/00_ingest.py                 # ~15 min, CSV → Parquet
+python scripts/01_data_quality.py
+python scripts/02_build_subscriptions.py    # ~3 min
+python scripts/03_calculate_metrics.py      # ~4 min with 10 GB RAM, cached after
+python scripts/make_readme_charts.py
 ```
 
 ---
 
-## Status
+## Project tracking
 
-- [x] Dataset generated (`data/`)
-- [x] Step 1 — data quality notes (6/6 checks passed)
-- [x] Step 2 — monthly snapshot (32,681 rows; sanity check matched exactly)
-- [x] Step 3 — core metrics (all 8 files generated, waterfall reconciles to $0 diff)
-- [x] Step 4 — dashboard (Streamlit + Plotly, 3 views)
-- [x] Step 5 — insights (`output/business_insights.md`)
-- [x] Step 6 — limitations (documented in `output/business_insights.md`)
+Work is tracked in Jira project **[KKBOX](https://baohandao2303.atlassian.net/jira/software/projects/KKBOX/boards)**.
+
+| Phase | Jira | Status |
+|---|---|:---:|
+| 0 · Ingest to Parquet | [KKBOX-2](https://baohandao2303.atlassian.net/browse/KKBOX-2) | ✅ |
+| 1 · Data quality | [KKBOX-3](https://baohandao2303.atlassian.net/browse/KKBOX-3) | ✅ |
+| 2 · Subscription snapshot | [KKBOX-4](https://baohandao2303.atlassian.net/browse/KKBOX-4) | ✅ |
+| — · Analysis decisions | [KKBOX-5](https://baohandao2303.atlassian.net/browse/KKBOX-5) | ✅ |
+| 3 · SaaS metrics | [KKBOX-6](https://baohandao2303.atlassian.net/browse/KKBOX-6) | ✅ |
+| 4 · Churn drivers + ML model | [KKBOX-7](https://baohandao2303.atlassian.net/browse/KKBOX-7) | ⏳ |
+| 5 · Dashboard | [KKBOX-8](https://baohandao2303.atlassian.net/browse/KKBOX-8) | ⏳ |
+| 6 · Insights write-up | [KKBOX-9](https://baohandao2303.atlassian.net/browse/KKBOX-9) | ⏳ |
 
 ---
 
-## Known limitations
+## Limitations
 
-Intentional gaps in the synthetic dataset — discuss these in the final write-up:
+- **No acquisition cost data** — CAC and LTV:CAC cannot be computed; LTV is compared across segments instead.
+- **Left-censored start** — users on long plans bought before 2015 are invisible until they renew, hence the Jul 2015 report start.
+- **Single price point** — expansion revenue is structurally near zero, so NRR mostly measures churn.
+- **Member attributes are sparse** — age is invalid for 67% of members and gender missing for 65%; 18% of paying users have no member record.
+- **Payment method IDs are anonymised** — outages can be located by method, not attributed to a named partner.
 
-- No seat-based/usage-based pricing — flat MRR per plan only.
-- No refunds, failed payments, or involuntary churn (all cancels are voluntary).
-- No macro/competitive shocks — churn and growth are driven only by plan, channel, and tenure.
-- Gross margin isn't in the data — an assumption must be stated to calculate LTV.
+<div align="center">
+<sub>Data © KKBox, released for the WSDM Cup 2018 Kaggle competition. Analysis by <a href="https://github.com/handao2303">Han Dao</a>.</sub>
+</div>
