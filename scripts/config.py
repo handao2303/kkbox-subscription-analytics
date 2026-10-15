@@ -39,6 +39,21 @@ REPORT_START = "2015-07-01"
 REPORT_END = "2017-02-01"
 GRACE_DAYS = 30  # Kaggle churn rule: no renewal within 30 days of expiry
 
+# DuckDB RAM cap; lower it (e.g. KKBOX_MEMORY=4GB) when running steps in parallel.
+MEMORY_LIMIT = os.environ.get("KKBOX_MEMORY", "10GB")
+
+
+def connect(step: str):
+    """DuckDB connection with the RAM cap and a spill folder private to `step`
+    (two processes sharing one temp folder can overwrite each other's files)."""
+    import duckdb
+
+    con = duckdb.connect()
+    con.execute(f"SET memory_limit = '{MEMORY_LIMIT}'")
+    con.execute(f"SET temp_directory = '{(PARQUET_DIR / f'_tmp_{step}').as_posix()}'")
+    con.execute("SET preserve_insertion_order = false")
+    return con
+
 
 def parquet(name: str) -> str:
     """Path to an ingested table, as a string DuckDB can read."""
