@@ -1,266 +1,236 @@
 """
-Step 3 — Core metrics.
+Step 3 — SaaS metrics from the monthly snapshot.
 
-Reads output/monthly_snapshot.csv (Step 2) plus the raw event ledger and
-reference tables, and writes eight metric files to output/:
+Every metric is built from one transition table: each user's state at the end
+of month M-1 (prev) vs month M (cur). "Paying" = active with MRR > 0.
 
-  mrr_by_month.csv        total MRR per month
-  mrr_waterfall.csv       New / Expansion / Contraction / Churned MRR per month
-  churn_rate_by_month.csv logo churn % and revenue churn %
-  nrr_by_month.csv        Net Revenue Retention %
-  cac_by_channel.csv      marketing spend / new customers, per channel per month
-  ltv_by_plan.csv         LTV = (ARPU x gross margin assumption) / churn rate
-  ltv_cac_by_channel.csv  LTV:CAC ratio per channel
-  cohort_retention.csv    % of each signup-month cohort still active N months later
+Churn definitions (agreed in KKBOX-5):
+  - logo churn       active at M-1, gone at M (Kaggle rule, 30-day grace)
+  - paid churn       paying at M-1, gone at M
+  - billing gap      a paid churn that belongs to a mass outage of one payment
+                     method AND that user came back on the same method within
+                     6 months. Kept in paid churn (Kaggle rule), also reported
+                     excluded (`paid_churn_ex_gap`).
+  - trial            users whose first active month is free; tracked as a
+                     conversion rate, never mixed into paid churn.
 
-Gross margin assumption: 80% (stated explicitly here — it is not in the
-raw data). See output/business_insights.md for why this figure was chosen.
+Outputs (output/):
+  mrr_waterfall.csv        MRR bridge per month: new, reactivation, expansion,
+                           contraction, churn (billing gap / other)
+  churn_rate_by_month.csv  logo / paid / paid ex-gap / revenue churn, NRR
+  billing_gap_episodes.csv detected outages by payment method
+  churn_type_by_month.csv  paid churn split: cancelled / auto-renew lapse / manual non-renewal
+  trial_conversion.csv     trial cohorts and % that pay within 3 months
+  cohort_retention.csv     % of each first-paid cohort still paying, by month since start
+  ltv_by_segment.csv       ARPU, churn ex-gap and LTV by segment
 """
 
-import sys
+import time
 
-import numpy as np
-import pandas as pd
+from config import OUTPUT, PARQUET_DIR, REPORT_END, REPORT_START, connect, parquet
 
-sys.stdout.reconfigure(encoding="utf-8")
+# Mass-outage rule: a (payment method, month) whose paid churn is at least
+# GAP_MULTIPLE x its usual level, at least GAP_MIN_USERS users, and where most
+# churners come back on the same method within GAP_RETURN_MONTHS.
+GAP_MULTIPLE = 3
+GAP_MIN_USERS = 5000
+GAP_MIN_RETURN_SHARE = 0.5
+GAP_RETURN_MONTHS = 6
+TRIAL_WINDOW_MONTHS = 3
 
-DATA = "data"
-OUTPUT = "output"
-GROSS_MARGIN = 0.80
+t0 = time.time()
+con = connect("03")
+S, M = f"'{parquet('snapshot')}'", f"'{parquet('members')}'"
+W = f"BETWEEN DATE '{REPORT_START}' AND DATE '{REPORT_END}'"
 
-customers = pd.read_csv(f"{DATA}/customers.csv", parse_dates=["signup_date"])
-events = pd.read_csv(f"{DATA}/subscription_events.csv", parse_dates=["event_date"])
-marketing = pd.read_csv(f"{DATA}/marketing_spend.csv", parse_dates=["month"])
-snapshot = pd.read_csv(f"{OUTPUT}/monthly_snapshot.csv", parse_dates=["month"])
 
-customers["signup_month"] = customers.signup_date.values.astype("datetime64[M]")
-events["event_month"] = events.event_date.values.astype("datetime64[M]")
+def save(name, sql):
+    df = con.execute(sql).df()
+    df.to_csv(OUTPUT / f"{name}.csv", index=False)
+    print(f"  {name}.csv: {len(df):,} rows")
+    return df
 
-ALL_MONTHS = pd.date_range("2023-01-01", "2024-12-01", freq="MS")
 
-# ----------------------------------------------------------------------
-# 1. mrr_by_month.csv
-# ----------------------------------------------------------------------
-mrr_by_month = (
-    snapshot.groupby("month")["mrr"].sum().reindex(ALL_MONTHS, fill_value=0)
-)
-mrr_by_month = mrr_by_month.rename_axis("month").reset_index(name="mrr")
-mrr_by_month.to_csv(f"{OUTPUT}/mrr_by_month.csv", index=False)
+con.execute(f"""
+CREATE TEMP TABLE snap AS
+SELECT s.*,
+       (month + INTERVAL 1 MONTH)::DATE AS next_month,
+       min(CASE WHEN mrr > 0 THEN month END) OVER (PARTITION BY msno) AS first_paid_month
+FROM {S} s
+""")
 
-# ----------------------------------------------------------------------
-# 2. mrr_waterfall.csv — New / Expansion / Contraction / Churned MRR
-# ----------------------------------------------------------------------
-delta = events.mrr_after - events.mrr_before
-waterfall_rows = []
-for month in ALL_MONTHS:
-    month_events = events[events.event_month == month]
+TR_CACHE = PARQUET_DIR / "transitions.parquet"
+cache_ok = TR_CACHE.exists() and TR_CACHE.stat().st_mtime > (PARQUET_DIR / "snapshot.parquet").stat().st_mtime
 
-    new_mrr = month_events.loc[month_events.event_type == "signup", "mrr_after"].sum()
+if cache_ok:
+    # The transition table is the slow part (minutes); reuse it while the
+    # snapshot is unchanged.
+    print("  reusing cached transitions.parquet")
+    con.execute(f"CREATE TEMP TABLE tr AS SELECT * FROM '{TR_CACHE.as_posix()}'")
+else:
+    # Next month the user is active again after a gap, and on which method.
+    con.execute("""
+    CREATE TEMP TABLE returns AS
+    SELECT msno, month, payment_method_id,
+           lead(month) OVER w AS next_active_month,
+           lead(payment_method_id) OVER w AS next_method
+    FROM snap
+    WINDOW w AS (PARTITION BY msno ORDER BY month)
+    """)
 
-    up = month_events[month_events.event_type == "upgrade"]
-    expansion_mrr = (up.mrr_after - up.mrr_before).clip(lower=0).sum()
+    # Transition table: one row per user per month where they were active at
+    # M-1 and/or M. prev_* describe the user at M-1 (segment attributes too).
+    con.execute(f"""
+    CREATE TEMP TABLE tr0 AS
+    SELECT coalesce(c.month, p.next_month) AS month,
+           coalesce(c.msno, p.msno) AS msno,
+           coalesce(p.mrr, 0) AS prev_mrr, coalesce(c.mrr, 0) AS cur_mrr,
+           p.msno IS NOT NULL AS prev_active, c.msno IS NOT NULL AS cur_active,
+           p.cancel_pending AS prev_cancel_pending, p.is_auto_renew AS prev_auto_renew,
+           p.payment_method_id AS prev_method, p.plan_days AS prev_plan_days,
+           coalesce(c.cohort_month, p.cohort_month) AS cohort_month,
+           coalesce(c.first_paid_month, p.first_paid_month) AS first_paid_month,
+           r.next_active_month, r.next_method
+    FROM snap c
+    FULL JOIN snap p ON c.msno = p.msno AND c.month = p.next_month
+    LEFT JOIN returns r ON r.msno = p.msno AND r.month = p.month
+    WHERE coalesce(c.month, p.next_month) {W}
+    """)
 
-    down = month_events[month_events.event_type == "downgrade"]
-    contraction_mrr = (down.mrr_before - down.mrr_after).clip(lower=0).sum()
-
-    can = month_events[month_events.event_type == "cancel"]
-    churned_mrr = can.mrr_before.sum()
-
-    prev_month = month - pd.DateOffset(months=1)
-    starting_mrr = (
-        mrr_by_month.loc[mrr_by_month.month == prev_month, "mrr"].sum()
-        if (mrr_by_month.month == prev_month).any()
-        else 0
+    # --- billing-gap detection ---------------------------------------------
+    con.execute(f"""
+    CREATE TEMP TABLE paid_churn AS
+    SELECT msno, month, prev_method,
+           next_active_month IS NOT NULL
+             AND next_active_month <= month + INTERVAL {GAP_RETURN_MONTHS} MONTH
+             AND next_method = prev_method AS returned_same_method
+    FROM tr0 WHERE prev_mrr > 0 AND NOT cur_active
+    """)
+    episodes = save("billing_gap_episodes", f"""
+    WITH by_m AS (
+        SELECT prev_method AS payment_method_id, month, count(*) AS churned,
+               avg(returned_same_method::INT) AS return_share
+        FROM paid_churn GROUP BY 1, 2
+    ),
+    base AS (
+        SELECT *, median(churned) OVER (PARTITION BY payment_method_id) AS usual_churn FROM by_m
     )
-    ending_mrr = mrr_by_month.loc[mrr_by_month.month == month, "mrr"].sum()
+    SELECT payment_method_id, month, churned, round(usual_churn) AS usual_churn,
+           round(churned / usual_churn, 1) AS multiple, round(return_share, 3) AS return_share
+    FROM base
+    WHERE churned >= {GAP_MIN_USERS} AND churned >= {GAP_MULTIPLE} * usual_churn
+      AND return_share >= {GAP_MIN_RETURN_SHARE}
+    ORDER BY month, payment_method_id
+    """)
+    con.register("episodes_df", episodes)
+    con.execute(f"""
+    COPY (
+        SELECT tr0.*, g.msno IS NOT NULL AS is_billing_gap
+        FROM tr0 LEFT JOIN (
+            SELECT pc.msno, pc.month FROM paid_churn pc
+            JOIN episodes_df e ON e.payment_method_id = pc.prev_method AND e.month = pc.month
+            WHERE pc.returned_same_method
+        ) g USING (msno, month)
+    ) TO '{TR_CACHE.as_posix()}' (FORMAT parquet, COMPRESSION zstd)
+    """)
+    con.execute("DROP TABLE tr0; DROP TABLE returns; DROP TABLE paid_churn")
+    con.execute(f"CREATE TEMP TABLE tr AS SELECT * FROM '{TR_CACHE.as_posix()}'")
 
-    waterfall_rows.append(
-        {
-            "month": month,
-            "starting_mrr": starting_mrr,
-            "new_mrr": new_mrr,
-            "expansion_mrr": expansion_mrr,
-            "contraction_mrr": -contraction_mrr,
-            "churned_mrr": -churned_mrr,
-            "ending_mrr": ending_mrr,
-        }
-    )
+# --- MRR waterfall ---------------------------------------------------------
+save("mrr_waterfall", """
+SELECT month,
+    round(sum(prev_mrr)) AS starting_mrr,
+    round(sum(cur_mrr) FILTER (WHERE prev_mrr = 0 AND month = first_paid_month)) AS new_mrr,
+    round(sum(cur_mrr) FILTER (WHERE prev_mrr = 0 AND month > first_paid_month)) AS reactivation_mrr,
+    round(sum(cur_mrr - prev_mrr) FILTER (WHERE prev_mrr > 0 AND cur_mrr > prev_mrr)) AS expansion_mrr,
+    -- includes paying -> free promo while still active
+    round(-sum(prev_mrr - cur_mrr) FILTER (WHERE prev_mrr > 0 AND cur_mrr < prev_mrr AND cur_active)) AS contraction_mrr,
+    round(-sum(prev_mrr) FILTER (WHERE prev_mrr > 0 AND NOT cur_active AND is_billing_gap)) AS churn_billing_gap_mrr,
+    round(-sum(prev_mrr) FILTER (WHERE prev_mrr > 0 AND NOT cur_active AND NOT is_billing_gap)) AS churn_other_mrr,
+    round(sum(cur_mrr)) AS ending_mrr
+FROM tr GROUP BY 1 ORDER BY 1
+""")
 
-mrr_waterfall = pd.DataFrame(waterfall_rows)
-mrr_waterfall.to_csv(f"{OUTPUT}/mrr_waterfall.csv", index=False)
+# --- churn rates and NRR ---------------------------------------------------
+save("churn_rate_by_month", """
+SELECT month,
+    count(*) FILTER (WHERE prev_active) AS active_start,
+    count(*) FILTER (WHERE prev_mrr > 0) AS paying_start,
+    round(count(*) FILTER (WHERE prev_active AND NOT cur_active)
+          / count(*) FILTER (WHERE prev_active), 4) AS logo_churn,
+    round(count(*) FILTER (WHERE prev_mrr > 0 AND NOT cur_active)
+          / count(*) FILTER (WHERE prev_mrr > 0), 4) AS paid_churn,
+    round(count(*) FILTER (WHERE prev_mrr > 0 AND NOT cur_active AND NOT is_billing_gap)
+          / count(*) FILTER (WHERE prev_mrr > 0 AND NOT is_billing_gap), 4) AS paid_churn_ex_gap,
+    count(*) FILTER (WHERE is_billing_gap) AS billing_gap_users,
+    round(sum(prev_mrr) FILTER (WHERE prev_mrr > 0 AND NOT cur_active)
+          / sum(prev_mrr), 4) AS revenue_churn,
+    -- NRR: this month's MRR from users who were paying last month / their MRR last month
+    round(sum(cur_mrr) FILTER (WHERE prev_mrr > 0) / sum(prev_mrr), 4) AS nrr
+FROM tr GROUP BY 1 ORDER BY 1
+""")
 
-# ----------------------------------------------------------------------
-# 3. churn_rate_by_month.csv — logo churn % and revenue churn %
-# ----------------------------------------------------------------------
-active_start = snapshot.groupby("month").agg(
-    active_customers_soM=("customer_id", "nunique"), mrr_soM=("mrr", "sum")
+# --- why paid users leave --------------------------------------------------
+save("churn_type_by_month", """
+SELECT month,
+    CASE WHEN is_billing_gap THEN 'billing gap'
+         WHEN prev_cancel_pending THEN 'cancelled by user'
+         WHEN prev_auto_renew THEN 'auto-renew lapsed'
+         ELSE 'manual plan not renewed' END AS churn_type,
+    count(*) AS users, round(sum(prev_mrr)) AS lost_mrr
+FROM tr WHERE prev_mrr > 0 AND NOT cur_active
+GROUP BY 1, 2 ORDER BY 1, 2
+""")
+
+# --- trials ------------------------------------------------------------------
+save("trial_conversion", f"""
+WITH trials AS (
+    SELECT msno, cohort_month, first_paid_month FROM snap
+    WHERE month = cohort_month AND mrr = 0 AND cohort_month {W}
 )
-active_start.index = active_start.index + pd.DateOffset(months=1)
+SELECT cohort_month AS month, count(*) AS trial_starts,
+    count(*) FILTER (WHERE first_paid_month <= cohort_month + INTERVAL {TRIAL_WINDOW_MONTHS} MONTH) AS converted,
+    round(converted / trial_starts, 4) AS conversion_rate
+FROM trials GROUP BY 1 ORDER BY 1
+""")
 
-churn_rows = []
-for month in ALL_MONTHS:
-    can = events[(events.event_type == "cancel") & (events.event_month == month)]
-    churned_logos = can.customer_id.nunique()
-    churned_mrr = can.mrr_before.sum()
-
-    prior = active_start.loc[month] if month in active_start.index else None
-    active_soM = int(prior.active_customers_soM) if prior is not None else 0
-    mrr_soM = float(prior.mrr_soM) if prior is not None else 0.0
-
-    logo_churn_rate = churned_logos / active_soM if active_soM else np.nan
-    revenue_churn_rate = churned_mrr / mrr_soM if mrr_soM else np.nan
-
-    churn_rows.append(
-        {
-            "month": month,
-            "active_customers_start_of_month": active_soM,
-            "churned_customers": churned_logos,
-            "logo_churn_rate": logo_churn_rate,
-            "mrr_start_of_month": mrr_soM,
-            "churned_mrr": churned_mrr,
-            "revenue_churn_rate": revenue_churn_rate,
-        }
-    )
-
-churn_rate_by_month = pd.DataFrame(churn_rows)
-churn_rate_by_month.to_csv(f"{OUTPUT}/churn_rate_by_month.csv", index=False)
-
-# ----------------------------------------------------------------------
-# 4. nrr_by_month.csv — existing customers only, excludes New MRR
-# ----------------------------------------------------------------------
-nrr_rows = []
-for _, w in mrr_waterfall.iterrows():
-    if w.starting_mrr:
-        nrr = (
-            w.starting_mrr + w.expansion_mrr + w.contraction_mrr + w.churned_mrr
-        ) / w.starting_mrr
-    else:
-        nrr = np.nan
-    nrr_rows.append({"month": w.month, "starting_mrr": w.starting_mrr, "nrr": nrr})
-
-nrr_by_month = pd.DataFrame(nrr_rows)
-nrr_by_month.to_csv(f"{OUTPUT}/nrr_by_month.csv", index=False)
-
-# ----------------------------------------------------------------------
-# 5. cac_by_channel.csv — spend / new customers, per channel per month
-# ----------------------------------------------------------------------
-new_customers = (
-    customers.groupby(["signup_month", "acquisition_channel"])
-    .size()
-    .rename("new_customers")
-    .reset_index()
-    .rename(columns={"signup_month": "month", "acquisition_channel": "channel"})
+# --- cohort retention (first-paid cohorts) -----------------------------------
+save("cohort_retention", f"""
+WITH cohorts AS (
+    SELECT first_paid_month AS cohort, count(DISTINCT msno) AS cohort_size
+    FROM snap WHERE first_paid_month {W} GROUP BY 1
 )
+SELECT s.first_paid_month AS cohort, c.cohort_size,
+    datediff('month', s.first_paid_month, s.month) AS months_since_start,
+    count(*) AS paying_users, round(count(*) / any_value(c.cohort_size), 4) AS retention
+FROM snap s JOIN cohorts c ON c.cohort = s.first_paid_month
+WHERE s.mrr > 0 AND s.month <= DATE '{REPORT_END}'
+GROUP BY 1, 2, 3 ORDER BY 1, 3
+""")
 
-cac_by_channel = marketing.merge(new_customers, on=["month", "channel"], how="left")
-cac_by_channel["new_customers"] = cac_by_channel.new_customers.fillna(0).astype(int)
-cac_by_channel["cac"] = cac_by_channel.spend / cac_by_channel.new_customers.replace(
-    0, np.nan
-)
-cac_by_channel = cac_by_channel.sort_values(["channel", "month"])
-cac_by_channel.to_csv(f"{OUTPUT}/cac_by_channel.csv", index=False)
+# --- LTV by segment ------------------------------------------------------------
+# LTV = ARPU / monthly paid churn (ex billing gap), both over the report window.
+con.execute(f"""
+CREATE TEMP TABLE seg AS
+SELECT t.prev_mrr, NOT t.cur_active AS churned,
+    coalesce(m.registered_via::VARCHAR, 'unknown') AS registered_via,
+    coalesce(m.city::VARCHAR, 'unknown') AS city,
+    t.prev_method::VARCHAR AS payment_method,
+    CASE WHEN t.prev_plan_days <= 31 THEN 'monthly (<=31d)'
+         WHEN t.prev_plan_days <= 200 THEN 'multi-month (32-200d)'
+         ELSE 'annual (>200d)' END AS plan_length,
+    CASE WHEN t.prev_auto_renew THEN 'auto-renew' ELSE 'manual' END AS renewal
+FROM tr t LEFT JOIN {M} m USING (msno)
+WHERE t.prev_mrr > 0 AND NOT t.is_billing_gap
+""")
+dims = ["registered_via", "city", "payment_method", "plan_length", "renewal"]
+save("ltv_by_segment", " UNION ALL ".join(f"""
+SELECT '{d}' AS dimension, {d} AS segment,
+    count(*) AS paying_user_months,
+    round(avg(prev_mrr), 1) AS arpu_ntd,
+    round(avg(churned::INT), 4) AS monthly_churn,
+    round(avg(prev_mrr) / nullif(avg(churned::INT), 0)) AS ltv_ntd
+FROM seg GROUP BY {d} HAVING count(*) >= 10000""" for d in dims)
+    + " ORDER BY dimension, ltv_ntd DESC")
 
-# ----------------------------------------------------------------------
-# 6. ltv_by_plan.csv — LTV = (ARPU x gross margin) / monthly churn rate
-# ----------------------------------------------------------------------
-last_month = ALL_MONTHS.max()
-current_state = snapshot[snapshot.month == last_month]
-
-overall_monthly_churn = churn_rate_by_month.logo_churn_rate.mean(skipna=True)
-
-plan_price = pd.read_csv(f"{DATA}/plans.csv").set_index("plan").monthly_price_usd
-
-ltv_rows = []
-for plan, arpu in plan_price.items():
-    if plan == "Free":
-        ltv = 0.0
-    else:
-        ltv = (arpu * GROSS_MARGIN) / overall_monthly_churn
-    active_now = int((current_state.plan == plan).sum())
-    ltv_rows.append(
-        {
-            "plan": plan,
-            "arpu_usd": arpu,
-            "gross_margin_assumption": GROSS_MARGIN,
-            "monthly_churn_rate_used": overall_monthly_churn,
-            "ltv_usd": ltv,
-            "active_customers_dec_2024": active_now,
-        }
-    )
-
-ltv_by_plan = pd.DataFrame(ltv_rows)
-ltv_by_plan.to_csv(f"{OUTPUT}/ltv_by_plan.csv", index=False)
-
-# ----------------------------------------------------------------------
-# 7. ltv_cac_by_channel.csv
-# ----------------------------------------------------------------------
-# Blended ARPU per channel among that channel's currently-active paying
-# customers, so each channel's LTV reflects the plan mix it actually brings.
-# monthly_snapshot.csv already carries acquisition_channel (Step 2 output).
-paying_active = current_state[current_state.plan != "Free"]
-arpu_by_channel = paying_active.groupby("acquisition_channel")["mrr"].mean()
-
-channel_ltv = (arpu_by_channel * GROSS_MARGIN) / overall_monthly_churn
-channel_ltv.name = "ltv_usd"
-
-total_spend_by_channel = marketing.groupby("channel").spend.sum()
-total_new_customers_by_channel = new_customers.groupby("channel").new_customers.sum()
-blended_cac = total_spend_by_channel / total_new_customers_by_channel
-blended_cac.name = "cac_usd"
-
-ltv_cac = pd.concat([channel_ltv, blended_cac], axis=1).rename_axis(
-    "acquisition_channel"
-).reset_index()
-ltv_cac["ltv_cac_ratio"] = ltv_cac.ltv_usd / ltv_cac.cac_usd
-ltv_cac = ltv_cac.sort_values("ltv_cac_ratio", ascending=False)
-ltv_cac.to_csv(f"{OUTPUT}/ltv_cac_by_channel.csv", index=False)
-
-# ----------------------------------------------------------------------
-# 8. cohort_retention.csv — % of each signup cohort active N months later
-# ----------------------------------------------------------------------
-cohort_size = customers.groupby("signup_month").size().rename("cohort_size")
-
-snap_with_cohort = snapshot.merge(
-    customers[["customer_id", "signup_month"]], on="customer_id", how="left"
-)
-snap_with_cohort["months_since_signup"] = (
-    (snap_with_cohort.month.dt.year - snap_with_cohort.signup_month.dt.year) * 12
-    + (snap_with_cohort.month.dt.month - snap_with_cohort.signup_month.dt.month)
-)
-
-active_counts = (
-    snap_with_cohort.groupby(["signup_month", "months_since_signup"])["customer_id"]
-    .nunique()
-    .rename("active_customers")
-    .reset_index()
-)
-
-cohort_retention = active_counts.merge(cohort_size, on="signup_month", how="left")
-cohort_retention["retention_rate"] = (
-    cohort_retention.active_customers / cohort_retention.cohort_size
-)
-cohort_retention = cohort_retention.rename(columns={"signup_month": "cohort_month"})
-cohort_retention = cohort_retention.sort_values(
-    ["cohort_month", "months_since_signup"]
-)
-cohort_retention.to_csv(f"{OUTPUT}/cohort_retention.csv", index=False)
-
-# ----------------------------------------------------------------------
-# Console summary
-# ----------------------------------------------------------------------
-print(f"Gross margin assumption used for LTV: {GROSS_MARGIN:.0%}")
-print(f"Overall average monthly logo churn rate: {overall_monthly_churn:.2%}")
-print()
-print("mrr_by_month.csv        ", mrr_by_month.shape)
-print("mrr_waterfall.csv       ", mrr_waterfall.shape)
-print("churn_rate_by_month.csv ", churn_rate_by_month.shape)
-print("nrr_by_month.csv        ", nrr_by_month.shape)
-print("cac_by_channel.csv      ", cac_by_channel.shape)
-print("ltv_by_plan.csv         ", ltv_by_plan.shape)
-print("ltv_cac_by_channel.csv  ", ltv_cac.shape)
-print("cohort_retention.csv    ", cohort_retention.shape)
-print()
-print("MRR: Jan 2023 =", int(mrr_by_month.iloc[0].mrr), "-> Dec 2024 =", int(mrr_by_month.iloc[-1].mrr))
-print()
-print("LTV:CAC by channel:")
-print(ltv_cac.to_string(index=False))
+print(f"done in {time.time() - t0:.0f}s")

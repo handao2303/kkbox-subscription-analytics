@@ -7,6 +7,9 @@ numpy>=1.24
 # Churn model (Step 4)
 scikit-learn>=1.5
 
+# README charts
+matplotlib>=3.8
+
 # Dashboard
 streamlit>=1.30
 plotly>=5.18

@@ -1,0 +1,67 @@
+month,churn_type,users,lost_mrr
+2015-07-01,auto-renew lapsed,9062,1332886.0
+2015-07-01,cancelled by user,2280,329146.0
+2015-07-01,manual plan not renewed,15066,2206648.0
+2015-08-01,auto-renew lapsed,8601,1265234.0
+2015-08-01,cancelled by user,2363,348877.0
+2015-08-01,manual plan not renewed,16027,2351575.0
+2015-09-01,auto-renew lapsed,7372,1084547.0
+2015-09-01,cancelled by user,2296,336242.0
+2015-09-01,manual plan not renewed,18311,2684438.0
+2015-10-01,auto-renew lapsed,9148,1340719.0
+2015-10-01,billing gap,21956,2863465.0
+2015-10-01,cancelled by user,2216,327699.0
+2015-10-01,manual plan not renewed,20188,2968280.0
+2015-11-01,auto-renew lapsed,8724,1279920.0
+2015-11-01,cancelled by user,2840,420747.0
+2015-11-01,manual plan not renewed,18643,2734643.0
+2015-12-01,auto-renew lapsed,19101,2759041.0
+2015-12-01,cancelled by user,2935,425846.0
+2015-12-01,manual plan not renewed,19429,2858301.0
+2016-01-01,auto-renew lapsed,14465,2129357.0
+2016-01-01,billing gap,6267,933783.0
+2016-01-01,cancelled by user,2445,361308.0
+2016-01-01,manual plan not renewed,19561,2855464.0
+2016-02-01,auto-renew lapsed,27643,4026535.0
+2016-02-01,cancelled by user,2921,418389.0
+2016-02-01,manual plan not renewed,20029,2913756.0
+2016-03-01,auto-renew lapsed,26963,3546010.0
+2016-03-01,billing gap,76991,11471659.0
+2016-03-01,cancelled by user,3363,488595.0
+2016-03-01,manual plan not renewed,26836,3902264.0
+2016-04-01,auto-renew lapsed,10329,1407257.0
+2016-04-01,billing gap,3735,556515.0
+2016-04-01,cancelled by user,3235,465230.0
+2016-04-01,manual plan not renewed,24858,3596253.0
+2016-05-01,auto-renew lapsed,14713,2003593.0
+2016-05-01,billing gap,7080,1054920.0
+2016-05-01,cancelled by user,2624,379400.0
+2016-05-01,manual plan not renewed,23521,3480038.0
+2016-06-01,auto-renew lapsed,11359,1599891.0
+2016-06-01,cancelled by user,2627,385783.0
+2016-06-01,manual plan not renewed,22586,3384388.0
+2016-07-01,auto-renew lapsed,9450,1366058.0
+2016-07-01,cancelled by user,2410,353598.0
+2016-07-01,manual plan not renewed,23409,3559024.0
+2016-08-01,auto-renew lapsed,10517,1487860.0
+2016-08-01,cancelled by user,2306,339822.0
+2016-08-01,manual plan not renewed,20661,3149724.0
+2016-09-01,auto-renew lapsed,10118,1396430.0
+2016-09-01,cancelled by user,2660,387031.0
+2016-09-01,manual plan not renewed,23414,3579663.0
+2016-10-01,auto-renew lapsed,11817,1634337.0
+2016-10-01,cancelled by user,3114,445035.0
+2016-10-01,manual plan not renewed,21422,3290670.0
+2016-11-01,auto-renew lapsed,10744,1483638.0
+2016-11-01,cancelled by user,2874,421274.0
+2016-11-01,manual plan not renewed,20358,3124385.0
+2016-12-01,auto-renew lapsed,11470,1547146.0
+2016-12-01,billing gap,15964,1732267.0
+2016-12-01,cancelled by user,2873,416397.0
+2016-12-01,manual plan not renewed,21618,3294552.0
+2017-01-01,auto-renew lapsed,14155,1825079.0
+2017-01-01,cancelled by user,2712,397018.0
+2017-01-01,manual plan not renewed,25623,3884958.0
+2017-02-01,auto-renew lapsed,13899,1787288.0
+2017-02-01,cancelled by user,2322,336940.0
+2017-02-01,manual plan not renewed,21167,3221048.0
