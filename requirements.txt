@@ -11,5 +11,5 @@ scikit-learn>=1.5
 matplotlib>=3.8
 
 # Dashboard
-streamlit>=1.30
+streamlit>=1.50
 plotly>=5.18

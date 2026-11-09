@@ -52,6 +52,7 @@ listening logs.
 
 - [Business questions](#business-questions)
 - [Key findings](#key-findings)
+- [Dashboard](#dashboard)
 - [Architecture](#architecture)
 - [Data](#data)
 - [Metric definitions](#metric-definitions)
@@ -177,6 +178,26 @@ about them **one month earlier**:
   month) reaches 60% of next month's churners.
 
 > Full numbers: [`output/`](output/) · Trial cohorts: [`output/trial_conversion.csv`](output/trial_conversion.csv) · Model: [`output/churn_model_metrics.csv`](output/churn_model_metrics.csv)
+
+---
+
+## Dashboard
+
+An interactive Streamlit app over the same outputs, with one month-range
+filter applied to every time series:
+
+| Tab | What it shows |
+|---|---|
+| **Growth** | MRR, MoM change, paying users, NRR · MRR trend · monthly MRR bridge with billing-gap churn separated |
+| **Retention** | paid churn with and without billing gaps (plus the list of detected outages) · churn reasons · NRR · cohort heatmap · trial conversion |
+| **Churn drivers & model** | churn rate by any segment · LTV by segment · model metrics · risk deciles · feature importance |
+
+```bash
+streamlit run dashboard/app.py
+```
+
+The app reads only the small CSVs in [`output/`](output/), so it runs without
+the 32 GB raw data.
 
 ---
 
@@ -322,7 +343,7 @@ Decisions that change the numbers, and why ([KKBOX-5](https://baohandao2303.atla
 ## Repository structure
 
 ```text
-taskflow-saas-metrics/
+kkbox-subscription-analytics/
 ├── README.md
 ├── requirements.txt
 ├── scripts/
@@ -349,7 +370,7 @@ taskflow-saas-metrics/
 │   └── churn_risk_deciles.csv
 ├── docs/images/                   README charts
 └── dashboard/
-    └── app.py                     Streamlit app (being rebuilt — phase 5)
+    └── app.py                     Streamlit app: Growth · Retention · Churn drivers & model
 ```
 
 ---
@@ -379,6 +400,7 @@ python scripts/02_build_subscriptions.py    # ~3 min
 python scripts/03_calculate_metrics.py      # ~4 min with 10 GB RAM, cached after
 python scripts/04_churn_drivers.py          # ~17 min first run (features cached), ~2 min after
 python scripts/make_readme_charts.py
+streamlit run dashboard/app.py
 ```
 
 ---
@@ -395,7 +417,7 @@ Work is tracked in Jira project **[KKBOX](https://baohandao2303.atlassian.net/ji
 | — · Analysis decisions | [KKBOX-5](https://baohandao2303.atlassian.net/browse/KKBOX-5) | ✅ |
 | 3 · SaaS metrics | [KKBOX-6](https://baohandao2303.atlassian.net/browse/KKBOX-6) | ✅ |
 | 4 · Churn drivers + ML model | [KKBOX-7](https://baohandao2303.atlassian.net/browse/KKBOX-7) | ✅ |
-| 5 · Dashboard | [KKBOX-8](https://baohandao2303.atlassian.net/browse/KKBOX-8) | ⏳ |
+| 5 · Dashboard | [KKBOX-8](https://baohandao2303.atlassian.net/browse/KKBOX-8) | ✅ |
 | 6 · Insights write-up | [KKBOX-9](https://baohandao2303.atlassian.net/browse/KKBOX-9) | ⏳ |
 
 ---
