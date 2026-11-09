@@ -1,0 +1,33 @@
+dimension,segment,users,churn_rate
+renewal,auto-renew,853906,0.0451
+renewal,manual,117054,0.4167
+last_action,cancelled,9165,0.8405
+last_action,renewed / paid,961795,0.0828
+plan,< 28 days,2168,0.9193
+plan,annual,9512,0.8581
+plan,monthly,942181,0.068
+plan,multi-month,14575,0.8067
+plan,no data,2524,0.5468
+price,free,4551,0.6638
+price,full price,965715,0.0873
+tenure,1-2 yr,357471,0.0877
+tenure,2+ yr,318043,0.085
+tenure,3-6 mo,65668,0.091
+tenure,6-12 mo,146440,0.0758
+tenure,< 3 mo,80814,0.1297
+tenure,no data,2524,0.5468
+listening,0 days,212019,0.0741
+listening,1-4 days,99868,0.0905
+listening,15-30 days,444186,0.0934
+listening,5-14 days,214887,0.0981
+listening_trend,dropped 10-50%,214494,0.091
+listening_trend,dropped > 50%,147070,0.0937
+listening_trend,stable,292565,0.0777
+listening_trend,up 10-100%,173240,0.084
+listening_trend,up > 100%,143591,0.1166
+registered_via,13,3391,0.0988
+registered_via,3,106459,0.1723
+registered_via,4,52744,0.231
+registered_via,7,462684,0.0447
+registered_via,9,235689,0.1268
+registered_via,unknown,109993,0.0535

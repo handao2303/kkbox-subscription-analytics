@@ -177,7 +177,54 @@ def ltv_segments():
     print("  docs/images/ltv_segments.png")
 
 
+def churn_drivers():
+    sg = pd.read_csv(OUTPUT / "churn_driver_segments.csv")
+    picks = [("renewal", "auto-renew"), ("renewal", "manual"),
+             ("last_action", "renewed / paid"), ("last_action", "cancelled"),
+             ("tenure", "< 3 mo"), ("tenure", "2+ yr"),
+             ("listening", "0 days"), ("listening", "15-30 days")]
+    names = {"renewal": "Renewal", "last_action": "Last action", "tenure": "Tenure",
+             "listening": "Days listened, last 30"}
+    d = pd.concat([sg[(sg.dimension == a) & (sg.segment == b)] for a, b in picks])
+    labels = [f"{names[r.dimension]}: {r.segment}" for r in d.itertuples()][::-1]
+    vals = d.churn_rate.values[::-1]
+    base = pd.read_csv(OUTPUT / "churn_model_metrics.csv").base_churn_rate.iloc[0]
+    fig, ax = plt.subplots(figsize=(10, 4.6))
+    ax.barh(labels, vals, color=[RED if v > 2 * base else BLUE for v in vals], height=0.6)
+    for i, (v, n) in enumerate(zip(vals, d.users.values[::-1])):
+        ax.text(v + 0.01, i, f"{v:.0%}  ({n / 1e3:,.0f}k users)", va="center", color=INK)
+    ax.axvline(base, color=INK_2, lw=1, ls="--", label=f"Average churn ({base:.0%})")
+    ax.legend(loc="lower right")
+    ax.xaxis.set_major_formatter(PercentFormatter(1, decimals=0))
+    ax.set_xlim(0, 1.15)
+    ax.grid(axis="y", visible=False)
+    ax.grid(axis="x", visible=True)
+    finish(fig, ax, "What predicts churn",
+           "Churn rate of users expiring in Mar 2017, by their state one month earlier",
+           "churn_drivers")
+
+
+def risk_deciles():
+    dc = pd.read_csv(OUTPUT / "churn_risk_deciles.csv")
+    fig, ax = plt.subplots(figsize=(10, 4))
+    colors = [RED if d == 1 else BLUE for d in dc.risk_decile]
+    ax.bar(dc.risk_decile.astype(str), dc.actual_churn_rate, color=colors, width=0.65)
+    for x, v in enumerate(dc.actual_churn_rate):
+        ax.text(x, v + 0.01, f"{v:.0%}", ha="center", color=INK, fontsize=9.5)
+    top = dc.iloc[0]
+    ax.annotate(f"Top 10% riskiest users hold\n{top.share_of_all_churners:.0%} of all churners",
+                (0, top.actual_churn_rate), xytext=(40, -30), textcoords="offset points",
+                color=INK, fontsize=10)
+    ax.yaxis.set_major_formatter(PercentFormatter(1, decimals=0))
+    ax.set_ylim(0, dc.actual_churn_rate.max() * 1.2)
+    ax.set_xlabel("Predicted risk decile (1 = highest risk)")
+    finish(fig, ax, "Churn model: actual churn by predicted risk",
+           "Gradient boosting, trained on Feb 2017 expiries, tested on Mar 2017 · ROC AUC 0.87",
+           "risk_deciles")
+
+
 if __name__ == "__main__":
     IMG.mkdir(parents=True, exist_ok=True)
-    for chart in (mrr_trend, mrr_bridge, churn_rates, cohort_heatmap, churn_types, ltv_segments):
+    for chart in (mrr_trend, mrr_bridge, churn_rates, cohort_heatmap, churn_types, ltv_segments,
+                  churn_drivers, risk_deciles):
         chart()

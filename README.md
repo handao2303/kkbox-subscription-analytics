@@ -36,6 +36,7 @@ listening logs.
 <td align="center"><b>3.9%</b><br><sub>avg. monthly paid churn<br>(excl. billing gaps)</sub></td>
 <td align="center"><b>94.8%</b><br><sub>avg. monthly NRR</sub></td>
 <td align="center"><b>13.1%</b><br><sub>trial → paid conversion</sub></td>
+<td align="center"><b>0.87</b><br><sub>churn model ROC AUC<br>(out-of-time)</sub></td>
 </tr>
 </table>
 
@@ -68,7 +69,7 @@ listening logs.
 |---|---|---|
 | 1 | **Health** — is MRR growing in a healthy way, and where does revenue leak? | MRR bridge, churn split, NRR |
 | 2 | **Segments** — which sign-up channel, payment method and plan type keep users longest and are worth most? | Cohorts, LTV by segment |
-| 3 | **Action** — should KKBox push auto-renew, fight voluntary cancellation, or re-engage low-listening users first? | Churn reasons, churn model *(phase 4)* |
+| 3 | **Action** — should KKBox push auto-renew, fight voluntary cancellation, or re-engage low-listening users first? | Churn reasons, churn drivers, risk model |
 
 ---
 
@@ -135,7 +136,47 @@ channel matters as much: users registered via channel 7 have an LTV of
 **So what:** moving manual payers onto auto-renew is the single largest LTV
 lever in the data — larger than any segment difference driven by price.
 
-> Full numbers: [`output/`](output/) · Trial cohorts: [`output/trial_conversion.csv`](output/trial_conversion.csv)
+### 6 · What predicts churn
+
+<img src="docs/images/churn_drivers.png" alt="Churn rate by renewal type, last action, tenure and listening activity" width="860">
+
+Looking at users whose membership expired in Mar 2017, and at what we knew
+about them **one month earlier**:
+
+- **Renewal type dominates.** Manual payers churn at **42%**, auto-renew users
+  at **5%** — a 9× gap on 117k users.
+- **A cancel is a near-certain exit.** 84% of users whose last action was a
+  cancellation are gone; they are a small group (9k) but should be routed to a
+  save offer immediately.
+- **New users are fragile.** Users with < 3 months of tenure churn at 13% vs 8%
+  for 2+ years.
+- **Listening activity is masked by billing.** Users who did not listen at all
+  in the last 30 days churn *less* overall (7%) than heavy listeners (9%),
+  because 98.5% of them are on auto-renew and keep paying without using the
+  product. Compared like for like, silence does raise risk: among auto-renew
+  users, silent ones churn at 5.7% vs 3.8% for those listening 15+ days. These
+  "silent payers" are revenue at risk the day their card fails or they notice
+  the charge.
+
+### 7 · Churn-risk model
+
+<img src="docs/images/risk_deciles.png" alt="Actual churn rate by predicted risk decile" width="860">
+
+| Model | ROC AUC | PR AUC | Top-10% churn rate | Lift | Churners caught in top 10% |
+|---|---:|---:|---:|---:|---:|
+| Logistic regression (baseline) | 0.825 | 0.550 | 52.8% | 5.9× | 58.7% |
+| **Gradient boosting** | **0.871** | **0.599** | **54.3%** | **6.0×** | **60.3%** |
+
+- **No leakage, out-of-time test:** trained on Feb 2017 expiries with data up to
+  31 Jan, tested on Mar 2017 expiries with data up to 28 Feb — exactly what the
+  business would have one month ahead.
+- **Top drivers** (permutation importance): last renewal type, last action was a
+  cancel, list price, days until expiry, payment method, tenure. Listening
+  features add little once billing behaviour is known.
+- **Use:** a retention team that contacts only the riskiest 10% (~97k users a
+  month) reaches 60% of next month's churners.
+
+> Full numbers: [`output/`](output/) · Trial cohorts: [`output/trial_conversion.csv`](output/trial_conversion.csv) · Model: [`output/churn_model_metrics.csv`](output/churn_model_metrics.csv)
 
 ---
 
@@ -290,6 +331,7 @@ taskflow-saas-metrics/
 │   ├── 01_data_quality.py         checks + handling decisions → data_quality_notes.md
 │   ├── 02_build_subscriptions.py  user × month snapshot (MRR, status, cohort)
 │   ├── 03_calculate_metrics.py    MRR bridge, churn, NRR, cohorts, LTV, billing gaps
+│   ├── 04_churn_drivers.py        churn drivers by segment + churn-risk models
 │   └── make_readme_charts.py      renders docs/images/*.png from output/
 ├── output/                        small aggregated results — all generated
 │   ├── data_quality_notes.md
@@ -300,7 +342,11 @@ taskflow-saas-metrics/
 │   ├── billing_gap_episodes.csv
 │   ├── trial_conversion.csv
 │   ├── cohort_retention.csv
-│   └── ltv_by_segment.csv
+│   ├── ltv_by_segment.csv
+│   ├── churn_driver_segments.csv
+│   ├── churn_model_metrics.csv
+│   ├── churn_feature_importance.csv
+│   └── churn_risk_deciles.csv
 ├── docs/images/                   README charts
 └── dashboard/
     └── app.py                     Streamlit app (being rebuilt — phase 5)
@@ -331,6 +377,7 @@ python scripts/00_ingest.py                 # ~15 min, CSV → Parquet
 python scripts/01_data_quality.py
 python scripts/02_build_subscriptions.py    # ~3 min
 python scripts/03_calculate_metrics.py      # ~4 min with 10 GB RAM, cached after
+python scripts/04_churn_drivers.py          # ~17 min first run (features cached), ~2 min after
 python scripts/make_readme_charts.py
 ```
 
@@ -347,7 +394,7 @@ Work is tracked in Jira project **[KKBOX](https://baohandao2303.atlassian.net/ji
 | 2 · Subscription snapshot | [KKBOX-4](https://baohandao2303.atlassian.net/browse/KKBOX-4) | ✅ |
 | — · Analysis decisions | [KKBOX-5](https://baohandao2303.atlassian.net/browse/KKBOX-5) | ✅ |
 | 3 · SaaS metrics | [KKBOX-6](https://baohandao2303.atlassian.net/browse/KKBOX-6) | ✅ |
-| 4 · Churn drivers + ML model | [KKBOX-7](https://baohandao2303.atlassian.net/browse/KKBOX-7) | ⏳ |
+| 4 · Churn drivers + ML model | [KKBOX-7](https://baohandao2303.atlassian.net/browse/KKBOX-7) | ✅ |
 | 5 · Dashboard | [KKBOX-8](https://baohandao2303.atlassian.net/browse/KKBOX-8) | ⏳ |
 | 6 · Insights write-up | [KKBOX-9](https://baohandao2303.atlassian.net/browse/KKBOX-9) | ⏳ |
 
