@@ -10,7 +10,7 @@
 ![scikit-learn](https://img.shields.io/badge/scikit--learn-1.5%2B-F7931E?logo=scikitlearn&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-dashboard-FF4B4B?logo=streamlit&logoColor=white)
 ![Data](https://img.shields.io/badge/data-Kaggle%20KKBox-20BEFF?logo=kaggle&logoColor=white)
-![Status](https://img.shields.io/badge/status-in%20progress-eda100)
+![Status](https://img.shields.io/badge/status-complete-0ca30c)
 
 <br>
 
@@ -177,6 +177,8 @@ about them **one month earlier**:
 - **Use:** a retention team that contacts only the riskiest 10% (~97k users a
   month) reaches 60% of next month's churners.
 
+> 📝 **Full write-up with recommendations:** [`output/business_insights.md`](output/business_insights.md)
+>
 > Full numbers: [`output/`](output/) · Trial cohorts: [`output/trial_conversion.csv`](output/trial_conversion.csv) · Model: [`output/churn_model_metrics.csv`](output/churn_model_metrics.csv)
 
 ---
@@ -355,6 +357,7 @@ kkbox-subscription-analytics/
 │   ├── 04_churn_drivers.py        churn drivers by segment + churn-risk models
 │   └── make_readme_charts.py      renders docs/images/*.png from output/
 ├── output/                        small aggregated results — all generated
+│   ├── business_insights.md       Finding → So what → Recommendation
 │   ├── data_quality_notes.md
 │   ├── monthly_summary.csv
 │   ├── mrr_waterfall.csv
@@ -418,7 +421,7 @@ Work is tracked in Jira project **[KKBOX](https://baohandao2303.atlassian.net/ji
 | 3 · SaaS metrics | [KKBOX-6](https://baohandao2303.atlassian.net/browse/KKBOX-6) | ✅ |
 | 4 · Churn drivers + ML model | [KKBOX-7](https://baohandao2303.atlassian.net/browse/KKBOX-7) | ✅ |
 | 5 · Dashboard | [KKBOX-8](https://baohandao2303.atlassian.net/browse/KKBOX-8) | ✅ |
-| 6 · Insights write-up | [KKBOX-9](https://baohandao2303.atlassian.net/browse/KKBOX-9) | ⏳ |
+| 6 · Insights write-up | [KKBOX-9](https://baohandao2303.atlassian.net/browse/KKBOX-9) | ✅ |
 
 ---
 
